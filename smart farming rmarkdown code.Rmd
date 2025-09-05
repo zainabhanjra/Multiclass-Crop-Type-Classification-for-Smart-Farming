@@ -1,0 +1,468 @@
+---
+title: "Multiclass Crop Type Classification for Smart Farming"
+author: "Zainab Hanjra"
+date: "`r Sys.Date()`"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Abstract
+
+This project explores the application of machine learning for crop type classification in the context of smart farming, using the Smart Farming 2024 (SF24) dataset. As agriculture faces increasing demands for efficiency and sustainability, precision farming powered by data analytics offers a transformative solution. The dataset comprises 2,200 observations across 23 features including soil nutrients, weather conditions, irrigation practices, and more, with the goal of accurately classifying 21 distinct crop types grown in California. Following exploratory data analysis and preprocessing in R, we trained and evaluated seven supervised learning models: Logistic Regression, LDA, QDA, KNN, SVM, Neural Network, and Random Forest. Data was split into training and test sets, scaled appropriately, and categorical variables were converted for modeling compatibility. Among all models, Random Forest achieved the highest classification accuracy (99.55%), significantly outperforming others like KNN (52.27%) and SVM (88.78%). Feature importance analysis revealed that rainfall, humidity, and potassium were the most influential predictors. Retraining the Random Forest model with selected features confirmed its robustness, with only a marginal accuracy increase to 99.69%. These findings demonstrate that ensemble methods like Random Forest are highly effective for complex, multiclass agricultural datasets, offering both predictive power and interpretability. The results underscore the potential of data-driven approaches in optimizing crop management and advancing the goals of smart agriculture.
+
+# Introduction
+
+Agriculture is undergoing a digital transformation driven by the need to improve efficiency, sustainability, and resilience in the face of growing global challenges. Smart farming—which leverages data, sensors, and machine and statistical learning offers powerful tools to support better crop management, environmental monitoring, and decision-making. In this project, we use a real-world dataset, Smart Farming 2024 (SF24), comprising 2200 observations and 23 original features to address a critical task in precision agriculture: *multiclass classification* of crop types. Each record includes measurements of key environmental and soil factors such as nitrogen (N), phosphorus (P), potassium (K), temperature, humidity, rainfall, pH, soil type, irrigation practices, and more. The target variable, *label* is categorical, representing 21 distinct crop types grown under various conditions across California. Our objective is to build predictive models capable of classifying crop types accurately based on the observed features. This task has practical applications in optimizing crop selection, managing agricultural inputs, and responding proactively to environmental stress. 
+
+# Methods
+
+## Exploratory Data Analysis
+
+The analysis begins with exploratory data analysis (EDA) to overview the data, its structure and feature distributions. Correlation analysis helped assess relationships between variables. 
+
+```{r EDA,fig.width=10, fig.height=10,echo=FALSE,message=FALSE,warning=FALSE}
+library(tidyverse)
+library(corrplot)
+
+data<-read.csv("D://STAT414//midterm project//smartfarmingdata.csv")
+data <- data %>% mutate_if(is.character, as.factor)
+data <- na.omit(data)
+attach(data)
+
+library(tidyverse)
+library(kableExtra)
+library(tibble)
+library(DataExplorer)
+library(collapsibleTree)
+library(colorspace)
+
+### Basic Data Overview
+
+datasummary<-introduce(data)
+```
+
+### Class Distribution of target variable, "label"
+
+```{r distribution,fig.width=10, fig.height=10,echo=FALSE,message=FALSE,warning=FALSE}
+plot_bar(data)
+```
+
+### Distribution of numeric variables
+
+```{r numeric,fig.width=10, fig.height=10,echo=FALSE,message=FALSE,warning=FALSE}
+plot_histogram(data)
+```
+
+### Correlation among predictors
+
+```{r correlation,fig.width=10, fig.height=10,echo=FALSE,message=FALSE,warning=FALSE}
+# Correlation plot
+
+cor_matrix <- cor(select(data, where(is.numeric)))
+corrplot(cor_matrix, method = "color")
+
+```
+
+## Preprocessing Data
+
+All analyses were conducted using R, and multiple libraries were utilized to handle data manipulation, visualization, modeling, and evaluation. Packages used included tidyverse, caret, glmnet, randomForest, nnet, e1071, pROC, DMwR2, smotefamily, and others. The preprocessing pipeline ensured data integrity, standardization, and proper preparation for model training and evaluation. All character variables were converted to factors to ensure compatibility with modeling functions. 
+
+```{r preprocessing, echo=FALSE,message=FALSE,warning=FALSE}
+
+# Loading necessary libraries
+library(tidyverse)
+library(caret)
+library(glmnet)
+library(randomForest)
+library(nnet)
+library(e1071)
+library(pROC)
+library(DMwR2)
+library(corrplot)
+library(smotefamily)
+library(ggplot2)
+library(caTools)
+library(dplyr)
+library(reshape2)
+library(MASS)
+library(class)
+library(gridExtra)
+
+target <- "label"
+
+data <- data %>% mutate_if(is.character, as.factor)
+scaled_data <- data %>% mutate(across(where(is.numeric) & !all_of(target), scale))
+
+trainIndex <- createDataPartition(scaled_data[[target]], p = 0.7, list = FALSE)
+trainData <- scaled_data[trainIndex, ]
+testData  <- scaled_data[-trainIndex, ]
+x_train <- model.matrix(as.formula(paste(target, "~ .")), data = trainData)[,-1]
+y_train <- trainData[[target]]
+x_test  <- model.matrix(as.formula(paste(target, "~ .")), data = testData)[,-1]
+y_test  <- testData[[target]]
+
+# Scale train and test data and ensure data remains a data.frame
+train_scaled <- trainData
+
+# Identify numeric columns
+num_cols <- sapply(trainData, is.numeric)
+train_scaled[ , num_cols] <- scale(trainData[ , num_cols])
+train_scaled <- as.data.frame(train_scaled)  # <-- this ensures it's a data frame
+
+test_scaled <- testData
+test_scaled[ , num_cols] <- scale(testData[ , num_cols],
+                                  center = attr(scale(trainData[ , num_cols]), "scaled:center"),
+                                  scale = attr(scale(trainData[ , num_cols]), "scaled:scale"))
+test_scaled <- as.data.frame(test_scaled)  # <-- also ensure this
+```
+
+### Data splitting into training and test data
+
+To maintain the integrity of model evaluation and prevent data leakage, scaling was performed after splitting the dataset into training (70%) and testing (30%) sets. Numeric features were standardized using scale(), with the test data scaled using the mean and standard deviation derived from the training data only.
+
+```{r split, message=FALSE,warning=FALSE}
+trainIndex <- createDataPartition(scaled_data[[target]], p = 0.7, list = FALSE)
+trainData <- scaled_data[trainIndex, ]
+testData  <- scaled_data[-trainIndex, ]
+```
+
+### Model Matrix Conversion
+
+To prepare for algorithms that require numerical input, model.matrix() was used to convert factor variables into dummy variables for training (x_train) and test (x_test) sets. The response variable (label) was isolated into y_train and y_test. Then training and test data were scaled separately to avoid information leakage. The test set was scaled using the mean and standard deviation derived from the training set only.
+
+```{r matrix,message=FALSE,warning=FALSE}
+x_train <- model.matrix(as.formula(paste(target, "~ .")), data = trainData)[,-1]
+y_train <- trainData[[target]]
+x_test  <- model.matrix(as.formula(paste(target, "~ .")), data = testData)[,-1]
+y_test  <- testData[[target]]
+```
+
+## Model fitting
+
+We trained a diverse set of 7 models—multinomial logistic regression, LDA, QDA, KNN, random forest, SVM, and neural network—to capture both linear and non-linear patterns in the data. Logistic regression, LDA, and QDA were selected for their interpretability and statistical foundation. KNN was included for its simplicity and ability to model complex boundaries. Random forest and SVM were chosen for their robustness and strong performance in high-dimensional, non-linear settings. A neural network was used to explore deep, non-linear feature interactions that traditional models might miss.
+
+```{r logistic, message=FALSE, warning=FALSE, results='hide'}
+suppressMessages(suppressWarnings(
+  nnet.fit <- multinom(label ~ ., data = train_scaled)
+))
+
+# Logistic regression
+
+nnet.fit= multinom(label ~ ., data = train_scaled)
+
+# LDA
+
+lda.fit=lda(label ~ ., data = train_scaled)
+
+# QDA
+
+qda.fit= qda(label ~ ., data = train_scaled)
+
+# KNN
+
+knn.fit= knn(train = x_train, test = x_test, cl = y_train, k = 5)
+
+# Random Forest
+
+rf.fit <- randomForest(label ~ ., data = train_scaled, 
+                       ntree = 500,
+                       mtry = sqrt(ncol(train_scaled) - 1),
+                       importance = TRUE)
+
+# SVM
+
+svm.fit <- svm(label ~ ., data = train_scaled, 
+               kernel = "radial",   
+               cost = 1,            
+               gamma = 1/ncol(train_scaled))
+
+# Neural Network
+
+nn.fit <- nnet(label ~ ., data = train_scaled, 
+               size = 5,         
+               maxit = 500,      
+               decay = 0.01,     
+               trace = FALSE)    
+
+```
+
+## Model Comparison and Evaluation
+
+Model performance was evaluated using accuracy and confusion matrices to compare classification success across models and identify specific misclassification patterns for each crop class.
+
+```{r MC,fig.width=10, fig.height=10,message=FALSE,warning=FALSE}
+
+# True labels
+
+true_labels <- test_scaled$label
+
+# Logistic Regression
+
+nnet.pred <- predict(nnet.fit, newdata = test_scaled)
+nnet.acc <- mean(nnet.pred == true_labels)
+
+# LDA
+
+lda.pred <- predict(lda.fit, test_scaled)$class
+lda.acc <- mean(lda.pred == true_labels)
+
+# QDA
+
+qda.pred <- predict(qda.fit, test_scaled)$class
+qda.acc <- mean(qda.pred == true_labels)
+
+# KNN
+
+knn.pred <- knn(train = train_scaled[, -which(names(train_scaled) == "label")],
+                test = test_scaled[, -which(names(test_scaled) == "label")],
+                cl = train_scaled$label, k = 5)
+knn.acc <- mean(knn.pred == true_labels)
+
+# Random Forest
+
+rf.pred <- predict(rf.fit, newdata = test_scaled)
+rf.acc <- mean(rf.pred == true_labels)
+
+# SVM
+
+svm.pred <- predict(svm.fit, newdata = test_scaled)
+svm.acc <- mean(svm.pred == true_labels)
+
+# Neural Net
+
+nn.pred <- predict(nn.fit, newdata = test_scaled, type = "class")
+nn.acc <- mean(nn.pred == true_labels)
+
+### Comparing accuracies
+
+accuracy_df <- data.frame(
+  Model = c("Logistic Regression", "LDA", "QDA", "KNN", "Random Forest", "SVM", "Neural Network"),
+  Accuracy = c(nnet.acc, lda.acc, qda.acc, knn.acc, rf.acc, svm.acc, nn.acc)
+)
+
+
+plot_accuracy<-ggplot(accuracy_df, aes(x = reorder(Model, Accuracy), y = Accuracy)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  geom_text(aes(label = round(Accuracy, 3)), vjust = -0.5, size = 3.5) +
+  coord_flip() +
+  labs(title = "Model Accuracy Comparison",
+       x = "Model",
+       y = "Accuracy") +
+  theme_minimal()
+
+### Plotting Confusion Matrices for all models
+
+plot_conf_matrix <- function(pred, actual, title) {
+  cm <- table(Predicted = pred, Actual = actual)
+  cm_df <- as.data.frame(cm)
+  ggplot(cm_df, aes(x = Actual, y = Predicted, fill = Freq)) +
+    geom_tile(color = "white") +
+    geom_text(aes(label = Freq), size = 3.5) +
+    scale_fill_gradient(low = "lightblue", high = "steelblue") +
+    labs(title = title, x = "Actual", y = "Predicted") +
+    theme_minimal()
+}
+
+p1 <- plot_conf_matrix(nnet.pred, test_scaled$label, "Logistic Regression")
+p2 <- plot_conf_matrix(lda.pred, test_scaled$label, "LDA")
+p3 <- plot_conf_matrix(qda.pred, test_scaled$label, "QDA")
+p4 <- plot_conf_matrix(knn.pred, test_scaled$label, "KNN")
+p5 <- plot_conf_matrix(rf.pred,  test_scaled$label, "Random Forest")
+p6 <- plot_conf_matrix(svm.pred, test_scaled$label, "SVM")
+p7 <- plot_conf_matrix(nn.pred,  test_scaled$label, "Neural Network")
+
+
+```
+
+## Feature Selection
+
+### Random Forest
+
+To enhance model interpretability and potentially improve generalization, feature selection was performed on the best-performing model, Random Forest. This model achieved the highest classification accuracy in our multiclass setting with 21 classes. Feature importances were extracted using the importance() function and ranked after which model was refitted using only selected features.
+
+```{r FS,echo=FALSE,message=FALSE,warning=FALSE}
+
+# Extract and rank feature importances
+rf_importance <- importance(rf.fit)[, "MeanDecreaseGini"]
+top_rf_features <- sort(rf_importance, decreasing = TRUE)[1:10]  # Select top 10
+rf_selected <- names(top_rf_features)
+
+# Refit model using only selected features
+rf_reduced <- randomForest(label ~ ., data = train_scaled[, c(rf_selected,"label")])
+
+```
+
+# Results
+
+## Model Summaries
+
+### Logistic Regression
+
+The residual deviance (0.00019) indicates an extremely good fit. The AIC (966.00) reflects model quality relative to complexity—useful for comparing with other models.
+
+```{r model summaries,echo=FALSE,message=FALSE,warning=FALSE}
+summary(nnet.fit)
+```
+
+# LDA
+
+```{r LDA summaries,echo=FALSE,message=FALSE,warning=FALSE}
+summary(lda.fit)
+```
+
+# QDA
+
+
+```{r QDA summaries,echo=FALSE,message=FALSE,warning=FALSE}
+summary(qda.fit)
+```
+
+```{r KNN summaries,echo=FALSE,message=FALSE,warning=FALSE}
+#summary(knn.fit)
+```
+
+# Random Forest
+
+```{r RF summaries,echo=FALSE,message=FALSE,warning=FALSE}
+summary(rf.fit)
+```
+
+LDA assumes equal covariance across classes and uses linear decision boundaries, which is reflected in its simpler, less complex model and appropriate for linearly separable data. QDA, on the other hand, estimates class-specific covariance, allowing for non-linear decision boundaries, which explains its improved performance for data with more complex relationships, as seen in the greater flexibility in its model. Random Forest, which handles complex feature interactions and offers robust class predictions, performs well in terms of feature importance and error rate, though the relatively high error rate indicates possible areas for model optimization. Thus, LDA works well for simpler, linearly separable data, QDA is preferred for non-linear data, and Random Forest provides the best performance but might need further tuning for error reduction.
+
+
+## Model Comparison and Evaluation
+
+To evaluate the performance of various classification models on the Smart Farming dataset, seven supervised learning models were trained and tested using 70:30 train-test split on scaled numeric features and encoded categorical variables. Model performance was assessed using classification accuracy as the metric.
+
+The classification accuracy for each model is summarized below:
+
+```{r comparison2,fig.width=10, fig.height=10,echo=FALSE,message=FALSE,warning=FALSE}
+
+print(accuracy_df)
+```
+
+The results were also verified through confusion heatmaps showing that Random Forest performs best, with predictions tightly aligned along the diagonal, indicating high accuracy. QDA, LDA, and Neural Network also show strong performance with minimal misclassifications. SVM and Logistic Regression perform moderately, while KNN has the poorest performance, with scattered predictions and significant confusion between classes. These patterns visually support the reported accuracy metrics for each model.
+
+```{r grid,fig.width=10, fig.height=10,echo=FALSE,message=FALSE,warning=FALSE}
+print(plot_accuracy)
+
+grid.arrange(p1, p2, p3, p4, p5, p6, p7, ncol = 3)
+
+```
+
+Among all models, Random Forest achieved the highest accuracy at 99.55%, followed by QDA (96.97%), and Neural Network (96.52%). The KNN model performed the worst, with an accuracy of just 52.27%, indicating poor generalization.
+
+The high performance of Random Forest led to its selection as the final model for prediction due to its robustness and ability to handle high-dimensional, multiclass data effectively.
+
+## Feature Selection
+
+### Random Forest
+
+Rainfall, Humidity, and K (Potassium) are the most influential in determining the target class across your 21 categories followed by P (Phosphorus), N (Nitrogen), and Temperature. pH and Sunlight Exposure show some influence but significantly less than the top contribution. Water usage efficiency and Pest pressure contribute minimally.
+
+```{r selection results,fig.width=10, fig.height=10,echo=FALSE,message=FALSE,warning=FALSE}
+
+# Barplot of top RF features
+barplot(top_rf_features,
+        las = 2, col = "darkgreen",
+        main = "Top 10 Feature Importances - Random Forest",
+        ylab = "Mean Decrease in Gini")
+
+```
+
+The classification accuracy after retraining with the selected features is as follows:
+
+```{r ,jgdf,fig.width=10, fig.height=10,echo=FALSE,message=FALSE,warning=FALSE}
+rf2.pred <- predict(rf_reduced, newdata = test_scaled)
+rf2.acc <- mean(rf2.pred == true_labels)
+rf2.acc
+
+```
+
+The Random Forest model, even with a reduced feature set, did not display an exceptional increase in accuracy. A minute increase from 99.55% to 99.69% was obtained. 
+
+
+# Discussion 
+
+  The results from the various models reveal significant differences in their performance, showcasing the importance of model selection in addressing the complexities of our high-dimensional and multiclass data. Logistic Regression, with a residual deviance of 0.00019, suggests a very good fit, although it may indicate overfitting or perfect class separation. The AIC of 966.00 supports this, reflecting the model’s quality in relation to its complexity. However, it does not capture non-linear relationships, limiting its ability to handle the complexity in the data.
+
+  LDA, assumes equal covariance across classes and uses linear decision boundaries. Its simplicity made it effective when the data followed linear relationships, though it fell short when dealing with non-linear relationships in the amart farming data. QDA, by allowing for non-linear decision boundaries and estimating class-specific covariance, showed improved performance with a higher accuracy of 96.97%. This model demonstrated greater flexibility in handling more complex relationships, making it a better fit for our data.
+
+  The Random Forest model outperformed all others with the highest accuracy of 99.55%. This result highlights the model’s ability to capture complex interactions between features, manage overfitting, and perform internal feature selection. Even with a reduced feature set, Random Forest showed minimal sensitivity to dimensionality, achieving a slight increase in accuracy from 99.55% to 99.69%. This robustness underscores its suitability for the high-dimensional, multiclass tasks associated with the data we chose, where it excels in aggregating multiple decision trees to reduce variance and increase predictive power.
+
+  In contrast, KNN performed poorly, with an accuracy of just 52.27%, likely due to the curse of dimensionality and the large number of classes (21) in the dataset. Distance-based methods like KNN can struggle when the feature space is high-dimensional and requires careful optimization, which was not the case here. SVM and Logistic Regression, while moderate in performance, were less effective in capturing non-linear patterns compared to Random Forest and Neural Networks.
+
+  Furthermore, the results suggest that ensemble and non-linear models, such as Random Forest, QDA, and Neural Networks, outperform simpler linear classifiers on the Smart Farming dataset. Random Forest, in particular, stood out for its robustness and reliability, justifying its selection as the final model for prediction. The model’s superior performance, coupled with its ability to handle feature selection internally, makes it particularly effective for this multiclass classification task.
+
+  Finally, retraining Random Forest using the most consistently selected features highlighted the importance of feature selection in enhancing both model interpretability and computational efficiency. The model maintained its top-tier accuracy of 99.55% despite dimensionality reduction, reinforcing that many original features were redundant or contributed minimally to the classification task. These findings emphasize the value of feature selection in streamlining models without sacrificing predictive power. Thus, **Random Forest remains the best-performing model for this dataset**, owing to its superior accuracy, feature robustness, and ability to handle complex, high-dimensional data.
+
+# Conclusion
+
+Our project directly supports real-life precision agriculture by enabling accurate, high-resolution classification of multiple crop types through utilization of high precision predictive models like RandomForest. It aids the improvement of crop monitoring, resource allocation, and decision-making. The model’s robustness to high-dimensional data and its ability to maintain high accuracy with fewer features make it ideal for smart farming systems, ensuring cost-effective, scalable, and interpretable solutions for diverse agricultural environments.
+
+# Appendix
+
+```{r appendix,fig.width=10, fig.height=10,message=FALSE,warning=FALSE}
+# library(tidyverse)
+# library(corrplot)
+
+# data <- read.csv("D://STAT414//midterm project//smartfarmingdata.csv")
+# data <- data %>% mutate_if(is.character, as.factor)
+# data <- na.omit(data)
+# attach(data)
+
+# library(tidyverse)
+# library(kableExtra)
+# library(tibble)
+# library(DataExplorer)
+# library(collapsibleTree)
+# library(colorspace)
+
+# datasummary <- introduce(data)
+# plot_str(data)
+# plot_bar(data)
+
+# plot_histogram(data)
+
+# cor_matrix <- cor(select(data, where(is.numeric)))
+# corrplot(cor_matrix, method = "color")
+
+# rf_importance <- importance(rf.fit)[, "MeanDecreaseGini"]
+# top_rf_features <- sort(rf_importance, decreasing = TRUE)[1:10]  # Select top 10
+# rf_selected <- names(top_rf_features)
+
+# rf_reduced <- randomForest(label ~ ., data = train_scaled[, c(rf_selected, "label")])
+
+# summary(nnet.fit)
+
+# summary(lda.fit)
+
+# summary(qda.fit)
+
+# summary(knn.fit)
+
+# summary(rf.fit)
+
+# summary(svm.fit)
+
+# summary(nn.fit)
+
+# print(accuracy_df)
+
+# print(plot_accuracy)
+
+# grid.arrange(p1, p2, p3, p4, p5, p6, p7, ncol = 3)
+
+# # Barplot of top RF features
+# barplot(top_rf_features,
+#         las = 2, col = "darkgreen",
+#         main = "Top 10 Feature Importances - Random Forest",
+#         ylab = "Mean Decrease in Gini")
+
+# rf2.pred <- predict(rf_reduced, newdata = test_scaled)
+# rf2.acc <- mean(rf2.pred == true_labels)
+# rf2.acc
+```
